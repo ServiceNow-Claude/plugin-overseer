@@ -1,0 +1,22 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Design prototypes (not part of the app)
+design-samples/
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

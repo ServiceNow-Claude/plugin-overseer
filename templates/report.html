@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plugin Overseer — {{ instance }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+
+<header>
+    <div class="logo">
+        <div class="logo-icon">⬡</div>
+        <span class="logo-text">Plugin Overseer</span>
+        <span class="instance-pill">{{ instance }}.service-now.com</span>
+    </div>
+    <div class="header-right">
+        <span>Refreshed {{ refreshed }}</span>
+        <a href="/" class="btn-refresh">↺ Refresh</a>
+    </div>
+</header>
+
+<main>
+    <div class="stats">
+        <div class="stat-card {% if update_count %}danger{% endif %}">
+            <div class="stat-label">Updates Available</div>
+            <div class="stat-num">{{ update_count }}</div>
+        </div>
+        <div class="stat-card safe">
+            <div class="stat-label">Up to Date</div>
+            <div class="stat-num">{{ up_to_date_count }}</div>
+        </div>
+        <div class="stat-card info">
+            <div class="stat-label">Total Installed</div>
+            <div class="stat-num">{{ total_count }}</div>
+        </div>
+    </div>
+
+    {% if plugins %}
+
+    <div class="search-bar">
+        <input type="search" id="plugin-search" placeholder="Search plugins by name, scope or vendor…" autocomplete="off">
+        <span class="search-count" id="search-count"></span>
+    </div>
+
+    <div class="tabs-toolbar">
+        <div class="tabs">
+            <button class="tab active" data-filter="updates">
+                Updates <span class="tab-count">{{ update_count }}</span>
+            </button>
+            <button class="tab" data-filter="uptodate">
+                Up to Date <span class="tab-count">{{ up_to_date_count }}</span>
+            </button>
+            <button class="tab" data-filter="all">
+                All <span class="tab-count">{{ total_count }}</span>
+            </button>
+        </div>
+        <div class="toolbar-right">
+            <label class="select-all-wrap">
+                <input type="checkbox" id="select-all">
+                <span>Select All</span>
+            </label>
+            <button class="btn btn-secondary" id="update-selected" disabled>
+                Update Selected
+            </button>
+            <button class="btn btn-primary" id="update-all">
+                Update All ({{ update_count }})
+            </button>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="plugin-table">
+            <thead>
+                <tr>
+                    <th class="col-check"></th>
+                    <th class="col-name">Plugin / Scope</th>
+                    <th class="col-vendor">Vendor</th>
+                    <th class="col-installed">Installed</th>
+                    <th class="col-arrow"></th>
+                    <th class="col-latest">Available</th>
+                    <th class="col-status">Status</th>
+                    <th class="col-date">Last Updated</th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for p in plugins %}
+                <tr class="plugin-row {% if p.has_update %}row-needs-update{% else %}row-up-to-date{% endif %}"
+                    data-sys-id="{{ p.sys_id }}"
+                    data-scope="{{ p.scope }}"
+                    data-name="{{ p.name | e }}"
+                    data-latest="{{ p.latest_version }}"
+                    data-has-update="{{ 'true' if p.has_update else 'false' }}">
+
+                    <td class="col-check" onclick="event.stopPropagation()">
+                        {% if p.has_update %}
+                        <input type="checkbox" class="plugin-cb" data-sys-id="{{ p.sys_id }}">
+                        {% endif %}
+                    </td>
+
+                    <td class="col-name">
+                        <div class="plugin-name">
+                            <span class="expand-chevron">›</span>{{ p.name }}
+                        </div>
+                        <div class="plugin-scope">{{ p.scope }}</div>
+                    </td>
+
+                    <td class="col-vendor">{{ p.vendor or '—' }}</td>
+
+                    <td class="col-installed">
+                        <code class="version">{{ p.version }}</code>
+                    </td>
+
+                    <td class="col-arrow">
+                        {% if p.has_update %}<span class="arrow">→</span>{% endif %}
+                    </td>
+
+                    <td class="col-latest">
+                        {% if p.has_update %}
+                        <code class="version version-new">{{ p.latest_version }}</code>
+                        {% else %}
+                        <span class="no-update">—</span>
+                        {% endif %}
+                    </td>
+
+                    <td class="col-status">
+                        {% if p.has_update %}
+                        <span class="badge badge-update">Update</span>
+                        {% else %}
+                        <span class="badge badge-ok">✓ Current</span>
+                        {% endif %}
+                    </td>
+
+                    <td class="col-date">{{ p.install_date or '—' }}</td>
+
+                    <td class="col-actions" onclick="event.stopPropagation()">
+                        {% if p.has_update %}
+                        <button class="btn btn-sm btn-update" data-sys-id="{{ p.sys_id }}">
+                            Update
+                        </button>
+                        {% endif %}
+                        <span class="row-status" id="status-{{ p.sys_id }}"></span>
+                    </td>
+                </tr>
+
+                <tr class="detail-row" id="detail-{{ p.sys_id }}">
+                    <td colspan="9">
+                        <div class="detail-panel">
+                            <div class="detail-inner">
+                                {% if p.short_description %}
+                                <div class="detail-description">{{ p.short_description }}</div>
+                                {% endif %}
+
+                                <div class="detail-meta">
+                                    <span>Scope: {{ p.scope }}</span>
+                                    <span>Last Updated: {{ p.install_date or '—' }}</span>
+                                    <span>Vendor: {{ p.vendor or '—' }}</span>
+                                    <span>
+                                        {% if p.has_update %}
+                                        {{ p.version }} → {{ p.latest_version }} available
+                                        {% else %}
+                                        {{ p.version }} — up to date
+                                        {% endif %}
+                                    </span>
+                                </div>
+
+                                <div class="detail-notes-section">
+                                    <div class="detail-notes-header">Release Notes</div>
+                                    {% if p.release_notes %}
+                                    <div class="detail-notes-body">{{ p.release_notes }}</div>
+                                    {% else %}
+                                    <div class="detail-notes-empty">
+                                        No release notes cached on this instance.
+                                        <a href="https://{{ instance }}.service-now.com/now/app-manager/home/app/id/{{ p.sys_id }}/v/{{ p.latest_version if p.has_update else p.version }}"
+                                           target="_blank" rel="noopener">View in App Manager ↗</a>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">✓</div>
+        <h2>No plugins found</h2>
+        <p>Check your ServiceNow connection and try refreshing.</p>
+    </div>
+    {% endif %}
+</main>
+
+<!-- Background script fallback modal -->
+<div class="modal-overlay" id="script-modal" hidden>
+    <div class="modal">
+        <div class="modal-header">
+            <h3>Background Script — Manual Fallback</h3>
+            <button class="modal-close" id="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <p>
+                Copy the script below and paste it into
+                <strong>System &gt; Scripts &gt; Background</strong>
+                in ServiceNow (set application scope to <em>Global</em>).
+            </p>
+            <textarea class="script-box" id="script-output" readonly rows="18"></textarea>
+            <button class="btn btn-secondary" id="copy-script">Copy to Clipboard</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const PLUGINS = {{ plugins | tojson }};
+    const UPDATE_COUNT = {{ update_count }};
+</script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Plugin Overseer — Error</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+<header>
+    <div class="header-content">
+        <div class="header-left">
+            <span class="header-logo">⬡</span>
+            <h1>Plugin Overseer</h1>
+        </div>
+    </div>
+</header>
+<main>
+    <div class="empty-state error-state">
+        <div class="empty-icon error-icon">✕</div>
+        <h2>Connection Error</h2>
+        <p>{{ error }}</p>
+        <a href="/" class="btn btn-primary" style="margin-top:16px;display:inline-block;">Try Again</a>
+    </div>
+</main>
+</body>
+</html>
