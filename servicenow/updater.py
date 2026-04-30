@@ -1,4 +1,5 @@
 import json
+import logging
 from .client import ServiceNowClient
 
 
@@ -112,13 +113,28 @@ APP_MANAGER_PATH     = "/api/sn_appclient/v1/appmanager/product/install"
 def _parse_tracker(result: dict) -> tuple[str, str]:
     """Extract (tracker_id, batch_id) from any recognised response shape."""
     inner = result.get("result", result)
-    if isinstance(inner, dict):
-        tracker = (inner.get("tracker_id") or inner.get("execution_tracker_id") or
-                   inner.get("executionTrackerId") or "")
-        batch   = (inner.get("batch_id") or inner.get("batch_installation_id") or
-                   inner.get("batchInstallationId") or "")
-        return tracker, batch
-    return "", ""
+    if not isinstance(inner, dict):
+        return "", ""
+    batch_info = inner.get("batchInfo", {}) or {}
+    links      = inner.get("links", {}) or {}
+    tracker = (
+        inner.get("tracker_id") or
+        inner.get("execution_tracker_id") or
+        inner.get("executionTrackerId") or
+        inner.get("trackerId") or
+        batch_info.get("execution_tracker_id") or
+        (links.get("progress") or {}).get("id") or
+        ""
+    )
+    batch = (
+        inner.get("batch_id") or
+        inner.get("batch_installation_id") or
+        inner.get("batchInstallationId") or
+        batch_info.get("batch_installation_id") or
+        (links.get("results") or {}).get("id") or
+        ""
+    )
+    return tracker, batch
 
 
 def update_batch(client: ServiceNowClient, plugins: list, update_all: bool = False) -> dict:
@@ -139,7 +155,7 @@ def update_batch(client: ServiceNowClient, plugins: list, update_all: bool = Fal
 
     # 1. Try the native App Manager endpoint (same API the UI uses)
     try:
-        result    = client.post(APP_MANAGER_PATH, body=payload)
+        result         = client.post(APP_MANAGER_PATH, body=payload)
         tracker, batch = _parse_tracker(result)
         return {
             "success": True,
@@ -149,6 +165,7 @@ def update_batch(client: ServiceNowClient, plugins: list, update_all: bool = Fal
             "message": f"Update triggered for {len(plugins)} plugin(s)",
         }
     except Exception as exc_am:
+        logging.warning("App Manager endpoint failed (%s), trying custom endpoint", exc_am)
         pass  # fall through to custom endpoint
 
     # 2. Try the custom plugin_overseer Scripted REST endpoint
@@ -178,7 +195,32 @@ def update_single(client: ServiceNowClient, plugin: dict) -> dict:
     return update_batch(client, [plugin])
 
 
+_SNCID_STATUS = {
+    "0": "pending",
+    "1": "running",
+    "2": "complete",
+    "3": "failed",
+    "4": "cancelled",
+}
+
+
 def get_update_status(client: ServiceNowClient, tracker_id: str) -> dict:
+    # App Manager uses the sn_cicd progress API — try it first
+    try:
+        result = client.get(f"/api/sn_cicd/progress/{tracker_id}")
+        r = result.get("result", {})
+        if isinstance(r, dict) and "status" in r:
+            state = _SNCID_STATUS.get(str(r.get("status", "")), "running")
+            return {
+                "success": True,
+                "state": state,
+                "percent": int(r.get("percent_complete") or 0),
+                "message": r.get("status_message") or r.get("status_label") or "",
+            }
+    except Exception:
+        pass
+
+    # Fallback: custom plugin_overseer endpoint uses sys_progress_worker
     try:
         result = client.get(
             f"/api/now/table/sys_progress_worker/{tracker_id}",
@@ -188,8 +230,27 @@ def get_update_status(client: ServiceNowClient, tracker_id: str) -> dict:
         return {
             "success": True,
             "state": r.get("state", ""),
-            "percent": r.get("percent_complete", 0),
+            "percent": int(r.get("percent_complete") or 0),
             "message": r.get("message", ""),
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+def get_app_version(client: ServiceNowClient, sys_id: str) -> dict:
+    """Poll the version of a specific app — used when no tracker ID is available."""
+    try:
+        result = client.get(f"/api/snc/plugin_overseer/version/{sys_id}")
+        r = result.get("result", result)
+        version = r.get("version", "")
+        latest  = r.get("latest_version", "")
+        done    = bool(version and latest and version == latest)
+        return {
+            "success": True,
+            "version": version,
+            "latest_version": latest,
+            "complete": done,
+            "name": r.get("name", ""),
         }
     except Exception as exc:
         return {"success": False, "error": str(exc)}

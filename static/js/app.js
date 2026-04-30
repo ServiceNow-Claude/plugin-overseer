@@ -142,10 +142,11 @@ async function runSingleUpdate(plugin, statusEl, btn) {
     if (btn) { btn.disabled = false; btn.classList.remove('updating'); }
 
     if (result.success && result.tracker_id) {
-        setStatus(statusEl, 'loading', 'Queued');
+        setStatus(statusEl, 'loading', 'Queued…');
         pollSingleStatus(result.tracker_id, plugin.sys_id, statusEl);
     } else if (result.success) {
-        setStatus(statusEl, 'success', '✓ Queued');
+        setStatus(statusEl, 'loading', 'Queued…');
+        pollVersionStatus(plugin.sys_id, plugin.latest_version, statusEl);
     } else if (result.script) {
         setStatus(statusEl, 'error', 'See script');
         showScriptModal(result.script);
@@ -177,12 +178,11 @@ async function runBatch(plugins) {
     if (updateSelBtn) updateSelBtn.disabled = false;
 
     if (result.success && result.tracker_id) {
-        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued'));
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued…'));
         pollBatchStatus(result.tracker_id, plugins);
     } else if (result.success) {
-        hideProgressBanner();
-        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'success', '✓ Queued'));
-        showToast(`Update queued for ${plugins.length} plugin${plugins.length !== 1 ? 's' : ''}`);
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued…'));
+        pollBatchVersionStatus(plugins);
     } else if (result.script) {
         hideProgressBanner();
         plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', 'See script'));
@@ -211,12 +211,11 @@ if (updateAllBtn) {
         updateAllBtn.disabled = false;
 
         if (result.success && result.tracker_id) {
-            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued'));
+            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued…'));
             pollBatchStatus(result.tracker_id, allPlugins);
         } else if (result.success) {
-            hideProgressBanner();
-            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'success', '✓ Queued'));
-            showToast('All updates queued');
+            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued…'));
+            pollBatchVersionStatus(allPlugins);
         } else if (result.script) {
             hideProgressBanner();
             allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', 'See script'));
@@ -304,8 +303,73 @@ function pollBatchStatus(trackerId, plugins, attempt = 0) {
         .catch(() => setTimeout(() => pollBatchStatus(trackerId, plugins, attempt + 1), 8000));
 }
 
+// ── Version polling — fallback when no tracker ID ─────────────────────────────
+
+function pollVersionStatus(sysId, targetVersion, statusEl, attempt = 0) {
+    if (attempt > 72) {
+        setStatus(statusEl, 'error', 'Timed out');
+        return;
+    }
+    fetch(`/api/version/${sysId}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                setTimeout(() => pollVersionStatus(sysId, targetVersion, statusEl, attempt + 1), 8000);
+                return;
+            }
+            if (data.complete || data.version === targetVersion) {
+                setStatus(statusEl, 'success', '✓ Done');
+                markPluginDone(sysId);
+            } else {
+                setStatus(statusEl, 'loading', 'Installing…');
+                setTimeout(() => pollVersionStatus(sysId, targetVersion, statusEl, attempt + 1), 8000);
+            }
+        })
+        .catch(() => setTimeout(() => pollVersionStatus(sysId, targetVersion, statusEl, attempt + 1), 10000));
+}
+
+function pollBatchVersionStatus(plugins, totalCount = null, attempt = 0) {
+    const total = totalCount ?? plugins.length;
+    if (attempt > 72) {
+        hideProgressBanner();
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', 'Timed out'));
+        showToast('Update timed out — check ServiceNow App Manager', true);
+        return;
+    }
+
+    Promise.all(
+        plugins.map(p =>
+            fetch(`/api/version/${p.sys_id}`).then(r => r.json()).catch(() => ({ success: false }))
+        )
+    ).then(results => {
+        const stillPending = [];
+
+        plugins.forEach((p, i) => {
+            const r = results[i];
+            if (r?.success && r.complete) {
+                setStatus($(`status-${p.sys_id}`), 'success', '✓ Done');
+                markPluginDone(p.sys_id);
+            } else {
+                setStatus($(`status-${p.sys_id}`), 'loading', 'Installing…');
+                stillPending.push(p);
+            }
+        });
+
+        const doneCount = total - stillPending.length;
+        const pct = Math.round((doneCount / total) * 100);
+        updateProgressBanner(pct, `${doneCount} of ${total} complete`);
+
+        if (stillPending.length === 0) {
+            hideProgressBanner();
+            showToast(`${total} plugin${total !== 1 ? 's' : ''} updated successfully`);
+        } else {
+            setTimeout(() => pollBatchVersionStatus(stillPending, total, attempt + 1), 8000);
+        }
+    });
+}
+
 function isTerminalSuccess(state) {
-    return ['complete', 'succeeded', 'success', 'installed'].includes(state);
+    return ['complete', 'succeeded', 'success', 'installed', 'successful'].includes(state);
 }
 
 function isTerminalFailure(state) {

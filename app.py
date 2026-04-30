@@ -4,13 +4,17 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, render_template, request
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
 # Suppress Werkzeug's raw HTTP access log — we emit our own descriptive lines
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 from servicenow.client import ServiceNowClient
 from servicenow.plugins import get_plugins
-from servicenow.updater import get_update_status, update_batch, update_single
+from servicenow.updater import get_app_version, get_update_status, update_batch, update_single
 
 load_dotenv()
 
@@ -105,6 +109,15 @@ def api_update_all():
 _logged_complete: set[str] = set()
 
 
+@app.route("/api/version/<sys_id>")
+def api_version(sys_id):
+    result = get_app_version(_client(), sys_id)
+    if result.get("complete"):
+        logging.info("VERSION  [%s] %s — updated to %s ✓",
+                     sys_id[:8], result.get("name", ""), result.get("version"))
+    return jsonify(result)
+
+
 @app.route("/api/status/<tracker_id>")
 def api_status(tracker_id):
     result = get_update_status(_client(), tracker_id)
@@ -118,15 +131,17 @@ def api_status(tracker_id):
 
     # Only log meaningful state changes, not every poll tick
     state_lower = state.lower()
-    if state_lower in ("complete", "complete_with_errors", "error", "failed", "cancelled"):
+    terminal_success = state_lower in ("complete", "successful", "succeeded", "success")
+    terminal_failure = state_lower in ("complete_with_errors", "error", "failed", "cancelled")
+    if terminal_success or terminal_failure:
         if tracker_id not in _logged_complete:
             _logged_complete.add(tracker_id)
-            if state_lower == "complete":
+            if terminal_success:
                 logging.info("STATUS  [%s] COMPLETE ✓  %s%%  %s", tracker_id[:8], percent, message)
             else:
                 logging.warning("STATUS  [%s] %s  %s%%  %s", tracker_id[:8], state.upper(), percent, message)
-    elif percent > 0:
-        logging.info("STATUS  [%s] %s  %s%%  %s", tracker_id[:8], state or "in_progress", percent, message)
+    elif percent > 0 or state_lower in ("running", "in_progress"):
+        logging.info("STATUS  [%s] %s  %s%%  %s", tracker_id[:8], state or "running", percent, message)
 
     return jsonify(result)
 
