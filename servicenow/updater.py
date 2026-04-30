@@ -1,22 +1,20 @@
-import json
 import logging
+from dataclasses import dataclass, asdict
 from .client import ServiceNowClient
 
 
-def _batch_payload(plugins: list) -> dict:
-    return {
-        "name": "Plugin Overseer Update",
-        "packages": [
-            {
-                "displayName": p["name"],
-                "id": p["sys_id"],
-                "load_demo_data": False,
-                "type": "application",
-                "requested_version": p["latest_version"],
-            }
-            for p in plugins
-        ],
-    }
+@dataclass
+class UpdateResult:
+    success: bool
+    method: str
+    tracker_id: str = ""
+    batch_id: str = ""
+    script: str = ""
+    error: str = ""
+    message: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 def _background_script(plugins: list, update_all: bool = False) -> str:
@@ -25,7 +23,6 @@ def _background_script(plugins: list, update_all: bool = False) -> str:
     When update_all=True it queries sys_store_app for everything needing an update.
     When update_all=False it filters sys_store_app to the named plugins only.
     """
-    target_names = json.dumps([p["name"] for p in plugins])
     name_filter = (
         "install_dateISNOTEMPTY^hide_on_ui=false^vendor=ServiceNow^ORvendorISEMPTY"
         if update_all
@@ -106,8 +103,8 @@ if (appsArray.length > 0) {{
 """
 
 
-PLUGIN_UPDATE_PATH   = "/api/snc/plugin_overseer/update"
-APP_MANAGER_PATH     = "/api/sn_appclient/v1/appmanager/product/install"
+PLUGIN_UPDATE_PATH = "/api/snc/plugin_overseer/update"
+APP_MANAGER_PATH   = "/api/sn_appclient/v1/appmanager/product/install"
 
 
 def _parse_tracker(result: dict) -> tuple[str, str]:
@@ -137,61 +134,72 @@ def _parse_tracker(result: dict) -> tuple[str, str]:
     return tracker, batch
 
 
-def update_batch(client: ServiceNowClient, plugins: list, update_all: bool = False) -> dict:
+def _build_payload(plugins: list) -> dict:
+    return {
+        "name": "Plugin Overseer Update",
+        "packages": [
+            {
+                "displayName": p["name"],
+                "id": p["sys_id"],
+                "load_demo_data": False,
+                "type": "application",
+                "requested_version": p["latest_version"],
+            }
+            for p in plugins
+        ],
+    }
+
+
+def _try_app_manager(client: ServiceNowClient, plugins: list) -> UpdateResult:
+    result         = client.post(APP_MANAGER_PATH, body=_build_payload(plugins))
+    tracker, batch = _parse_tracker(result)
+    return UpdateResult(
+        success=True,
+        method="app_manager",
+        tracker_id=tracker,
+        batch_id=batch,
+        message=f"Update triggered for {len(plugins)} plugin(s)",
+    )
+
+
+def _try_scripted_rest(client: ServiceNowClient, plugins: list) -> UpdateResult:
+    result         = client.post(PLUGIN_UPDATE_PATH, body={"plugins": plugins})
+    tracker, batch = _parse_tracker(result)
+    return UpdateResult(
+        success=True,
+        method="plugin_overseer_api",
+        tracker_id=tracker,
+        batch_id=batch,
+        message=f"Update triggered for {len(plugins)} plugin(s)",
+    )
+
+
+def _try_script_fallback(plugins: list, update_all: bool = False, error: str = "") -> UpdateResult:
+    return UpdateResult(
+        success=False,
+        method="script_fallback",
+        script=_background_script(plugins, update_all=update_all),
+        error=error,
+        message="API endpoints unavailable — use the generated background script instead.",
+    )
+
+
+def update_batch(client: ServiceNowClient, plugins: list, update_all: bool = False) -> UpdateResult:
     if not plugins:
-        return {"success": False, "error": "No plugins provided"}
+        return UpdateResult(success=False, method="none", error="No plugins provided")
 
-    packages = [
-        {
-            "displayName": p["name"],
-            "id": p["sys_id"],
-            "load_demo_data": False,
-            "type": "application",
-            "requested_version": p["latest_version"],
-        }
-        for p in plugins
-    ]
-    payload = {"name": "Plugin Overseer Update", "packages": packages}
-
-    # 1. Try the native App Manager endpoint (same API the UI uses)
     try:
-        result         = client.post(APP_MANAGER_PATH, body=payload)
-        tracker, batch = _parse_tracker(result)
-        return {
-            "success": True,
-            "method": "app_manager",
-            "tracker_id": tracker,
-            "batch_id": batch,
-            "message": f"Update triggered for {len(plugins)} plugin(s)",
-        }
-    except Exception as exc_am:
-        logging.warning("App Manager endpoint failed (%s), trying custom endpoint", exc_am)
-        pass  # fall through to custom endpoint
+        return _try_app_manager(client, plugins)
+    except Exception as exc:
+        logging.warning("App Manager endpoint failed (%s), trying custom endpoint", exc)
 
-    # 2. Try the custom plugin_overseer Scripted REST endpoint
     try:
-        result    = client.post(PLUGIN_UPDATE_PATH, body={"plugins": plugins})
-        inner     = result.get("result", {})
-        tracker   = inner.get("tracker_id") or inner.get("execution_tracker_id") or ""
-        batch     = inner.get("batch_id") or inner.get("batch_installation_id") or ""
-        return {
-            "success": True,
-            "method": "plugin_overseer_api",
-            "tracker_id": tracker,
-            "batch_id": batch,
-            "message": f"Update triggered for {len(plugins)} plugin(s)",
-        }
-    except Exception as exc_po:
-        return {
-            "success": False,
-            "method": "script_fallback",
-            "script": _background_script(plugins, update_all=update_all),
-            "error": str(exc_po),
-            "message": "API endpoints unavailable — use the generated background script instead.",
-        }
+        return _try_scripted_rest(client, plugins)
+    except Exception as exc:
+        return _try_script_fallback(plugins, update_all=update_all, error=str(exc))
 
 
-def update_single(client: ServiceNowClient, plugin: dict) -> dict:
+def update_single(client: ServiceNowClient, plugin: dict) -> UpdateResult:
     return update_batch(client, [plugin])
 
 
