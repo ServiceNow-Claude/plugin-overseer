@@ -131,6 +131,9 @@
                         {% else %}
                         <span class="badge badge-ok">✓ Current</span>
                         {% endif %}
+                        {% if p.installed_as_dependency %}
+                        <span class="badge badge-dep" title="Installed automatically as a dependency of another plugin">Dependency</span>
+                        {% endif %}
                     </td>
 
                     <td class="col-date">{{ p.install_date or '—' }}</td>
@@ -166,6 +169,21 @@
                                     </span>
                                 </div>
 
+                                {% if p.dependencies %}
+                                <div class="detail-deps-section">
+                                    <div class="detail-notes-header">Requires</div>
+                                    <div class="detail-deps-list">
+                                        {% for dep in p.dependencies %}
+                                        {% set dep_plugin = plugins | selectattr('sys_id', 'equalto', dep.sys_id) | first %}
+                                        <span class="dep-chip {% if dep_plugin and dep_plugin.has_update %}dep-needs-update{% endif %}"
+                                              title="{% if dep_plugin and dep_plugin.has_update %}Update available: {{ dep_plugin.version }} → {{ dep_plugin.latest_version }}{% endif %}">
+                                            {% if dep_plugin and dep_plugin.has_update %}⚠ {% endif %}{{ dep.name or dep.sys_id }}
+                                        </span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+
                                 <div class="detail-notes-section">
                                     <div class="detail-notes-header">Release Notes</div>
                                     {% if p.release_notes %}
@@ -196,21 +214,47 @@
     {% endif %}
 </main>
 
+<!-- Batch progress banner (slides up from bottom) -->
+<div id="progress-banner" class="progress-banner" aria-live="polite">
+    <div class="progress-banner-inner">
+        <span class="progress-spinner-icon">⟳</span>
+        <div class="progress-banner-text">
+            <span id="progress-banner-label">Updating plugins...</span>
+            <span id="progress-banner-msg" class="progress-banner-msg"></span>
+        </div>
+        <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" id="progress-bar-fill"></div>
+        </div>
+        <span id="progress-banner-pct" class="progress-banner-pct">0%</span>
+    </div>
+</div>
+
+<!-- Completion toast -->
+<div id="completion-toast" class="completion-toast" hidden>
+    <span id="toast-icon">✓</span>
+    <span id="toast-text">Update complete</span>
+</div>
+
 <!-- Background script fallback modal -->
 <div class="modal-overlay" id="script-modal" hidden>
     <div class="modal">
         <div class="modal-header">
-            <h3>Background Script — Manual Fallback</h3>
+            <h3>Manual Update Required</h3>
             <button class="modal-close" id="modal-close">✕</button>
         </div>
         <div class="modal-body">
-            <p>
-                Copy the script below and paste it into
-                <strong>System &gt; Scripts &gt; Background</strong>
-                in ServiceNow (set application scope to <em>Global</em>).
-            </p>
-            <textarea class="script-box" id="script-output" readonly rows="18"></textarea>
-            <button class="btn btn-secondary" id="copy-script">Copy to Clipboard</button>
+            <div class="fallback-notice">
+                <span class="fallback-notice-icon">⚠</span>
+                <span>The direct update API is unavailable on this instance. Run the script below instead — it performs the same update.</span>
+            </div>
+            <ol class="fallback-steps">
+                <li>Copy the script using the button below</li>
+                <li>Open <a id="bg-script-link" href="#" target="_blank" rel="noopener"><strong>System &gt; Scripts &gt; Background ↗</strong></a> in ServiceNow</li>
+                <li>Set the application scope to <strong>Global</strong></li>
+                <li>Paste the script and click <strong>Run script</strong></li>
+            </ol>
+            <textarea class="script-box" id="script-output" readonly rows="16"></textarea>
+            <button class="btn btn-primary" id="copy-script">Copy Script to Clipboard</button>
         </div>
     </div>
 </div>

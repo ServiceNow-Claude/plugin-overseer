@@ -105,32 +105,72 @@ if (appsArray.length > 0) {{
 """
 
 
-PLUGIN_UPDATE_PATH = "/api/snc/plugin_overseer/update"
+PLUGIN_UPDATE_PATH   = "/api/snc/plugin_overseer/update"
+APP_MANAGER_PATH     = "/api/sn_appclient/v1/appmanager/product/install"
+
+
+def _parse_tracker(result: dict) -> tuple[str, str]:
+    """Extract (tracker_id, batch_id) from any recognised response shape."""
+    inner = result.get("result", result)
+    if isinstance(inner, dict):
+        tracker = (inner.get("tracker_id") or inner.get("execution_tracker_id") or
+                   inner.get("executionTrackerId") or "")
+        batch   = (inner.get("batch_id") or inner.get("batch_installation_id") or
+                   inner.get("batchInstallationId") or "")
+        return tracker, batch
+    return "", ""
 
 
 def update_batch(client: ServiceNowClient, plugins: list, update_all: bool = False) -> dict:
     if not plugins:
         return {"success": False, "error": "No plugins provided"}
 
+    packages = [
+        {
+            "displayName": p["name"],
+            "id": p["sys_id"],
+            "load_demo_data": False,
+            "type": "application",
+            "requested_version": p["latest_version"],
+        }
+        for p in plugins
+    ]
+    payload = {"name": "Plugin Overseer Update", "packages": packages}
+
+    # 1. Try the native App Manager endpoint (same API the UI uses)
     try:
-        result = client.post(PLUGIN_UPDATE_PATH, body={"plugins": plugins})
-        inner = result.get("result", {})
-        tracker_id = inner.get("tracker_id") or inner.get("execution_tracker_id")
-        batch_id   = inner.get("batch_id") or inner.get("batch_installation_id")
+        result    = client.post(APP_MANAGER_PATH, body=payload)
+        tracker, batch = _parse_tracker(result)
         return {
             "success": True,
-            "method": "api",
-            "tracker_id": tracker_id,
-            "batch_id": batch_id,
+            "method": "app_manager",
+            "tracker_id": tracker,
+            "batch_id": batch,
             "message": f"Update triggered for {len(plugins)} plugin(s)",
         }
-    except Exception as exc:
+    except Exception as exc_am:
+        pass  # fall through to custom endpoint
+
+    # 2. Try the custom plugin_overseer Scripted REST endpoint
+    try:
+        result    = client.post(PLUGIN_UPDATE_PATH, body={"plugins": plugins})
+        inner     = result.get("result", {})
+        tracker   = inner.get("tracker_id") or inner.get("execution_tracker_id") or ""
+        batch     = inner.get("batch_id") or inner.get("batch_installation_id") or ""
+        return {
+            "success": True,
+            "method": "plugin_overseer_api",
+            "tracker_id": tracker,
+            "batch_id": batch,
+            "message": f"Update triggered for {len(plugins)} plugin(s)",
+        }
+    except Exception as exc_po:
         return {
             "success": False,
             "method": "script_fallback",
             "script": _background_script(plugins, update_all=update_all),
-            "error": str(exc),
-            "message": "API endpoint unavailable — use the generated background script instead.",
+            "error": str(exc_po),
+            "message": "API endpoints unavailable — use the generated background script instead.",
         }
 
 

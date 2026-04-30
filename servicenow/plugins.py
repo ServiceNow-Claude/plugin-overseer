@@ -34,16 +34,18 @@ def get_plugins(client: ServiceNowClient):
         has_update = _has_update(version, latest)
 
         plugin = {
-            "sys_id":            r.get("sys_id", ""),
-            "name":              r.get("name", ""),
-            "scope":             r.get("scope", ""),
-            "version":           version or "—",
-            "latest_version":    latest or "—",
-            "vendor":            r.get("vendor", ""),
-            "install_date":      (r.get("install_date") or "")[:10],
-            "short_description": r.get("short_description", ""),
-            "release_notes":     r.get("release_notes", ""),
-            "has_update":        has_update,
+            "sys_id":                  r.get("sys_id", ""),
+            "name":                    r.get("name", ""),
+            "scope":                   r.get("scope", ""),
+            "version":                 version or "—",
+            "latest_version":          latest or "—",
+            "vendor":                  r.get("vendor", ""),
+            "install_date":            (r.get("install_date") or "")[:10],
+            "short_description":       r.get("short_description", ""),
+            "release_notes":           r.get("release_notes", ""),
+            "has_update":              has_update,
+            "installed_as_dependency": bool(r.get("installed_as_dependency", False)),
+            "dependencies":            r.get("dependencies", []),
         }
         all_plugins.append(plugin)
         if has_update:

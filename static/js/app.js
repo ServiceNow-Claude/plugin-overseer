@@ -3,17 +3,25 @@
 const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
 
-// ── DOM refs (all declared up front to avoid temporal dead zone errors) ────────
+// ── DOM refs ───────────────────────────────────────────────────────────────────
 
-const searchInput  = $('plugin-search');
-const searchCount  = $('search-count');
-const selectAllCb  = $('select-all');
-const updateSelBtn = $('update-selected');
-const updateAllBtn = $('update-all');
-const modal        = $('script-modal');
-const scriptBox    = $('script-output');
-const modalClose   = $('modal-close');
-const copyBtn      = $('copy-script');
+const searchInput        = $('plugin-search');
+const searchCount        = $('search-count');
+const selectAllCb        = $('select-all');
+const updateSelBtn       = $('update-selected');
+const updateAllBtn       = $('update-all');
+const modal              = $('script-modal');
+const scriptBox          = $('script-output');
+const modalClose         = $('modal-close');
+const copyBtn            = $('copy-script');
+const progressBanner     = $('progress-banner');
+const progressBarFill    = $('progress-bar-fill');
+const progressBannerLabel = $('progress-banner-label');
+const progressBannerMsg  = $('progress-banner-msg');
+const progressBannerPct  = $('progress-banner-pct');
+const completionToast    = $('completion-toast');
+const toastIcon          = $('toast-icon');
+const toastText          = $('toast-text');
 
 // ── Filter tabs ────────────────────────────────────────────────────────────────
 
@@ -121,11 +129,33 @@ $$('.btn-update').forEach(btn => {
         const row      = btn.closest('.plugin-row');
         const plugin   = rowToPlugin(row);
         const statusEl = $(`status-${plugin.sys_id}`);
-        runUpdate('/api/update', plugin, statusEl, btn);
+        runSingleUpdate(plugin, statusEl, btn);
     });
 });
 
-// ── Batch / all update buttons ─────────────────────────────────────────────────
+async function runSingleUpdate(plugin, statusEl, btn) {
+    setStatus(statusEl, 'loading', '⟳');
+    if (btn) { btn.disabled = true; btn.classList.add('updating'); }
+
+    const result = await post('/api/update', plugin);
+
+    if (btn) { btn.disabled = false; btn.classList.remove('updating'); }
+
+    if (result.success && result.tracker_id) {
+        setStatus(statusEl, 'loading', 'Queued');
+        pollSingleStatus(result.tracker_id, plugin.sys_id, statusEl);
+    } else if (result.success) {
+        setStatus(statusEl, 'success', '✓ Queued');
+    } else if (result.script) {
+        setStatus(statusEl, 'error', 'See script');
+        showScriptModal(result.script);
+    } else {
+        setStatus(statusEl, 'error', '✕ Error');
+        console.error('[Plugin Overseer]', result.error);
+    }
+}
+
+// ── Batch (selected) update ────────────────────────────────────────────────────
 
 if (updateSelBtn) {
     updateSelBtn.addEventListener('click', () => {
@@ -135,66 +165,172 @@ if (updateSelBtn) {
     });
 }
 
+async function runBatch(plugins) {
+    plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', '⟳'));
+    if (updateSelBtn) updateSelBtn.disabled = true;
+
+    const label = `Updating ${plugins.length} plugin${plugins.length !== 1 ? 's' : ''}…`;
+    showProgressBanner(label);
+
+    const result = await post('/api/update/batch', { plugins });
+
+    if (updateSelBtn) updateSelBtn.disabled = false;
+
+    if (result.success && result.tracker_id) {
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued'));
+        pollBatchStatus(result.tracker_id, plugins);
+    } else if (result.success) {
+        hideProgressBanner();
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'success', '✓ Queued'));
+        showToast(`Update queued for ${plugins.length} plugin${plugins.length !== 1 ? 's' : ''}`);
+    } else if (result.script) {
+        hideProgressBanner();
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', 'See script'));
+        showScriptModal(result.script);
+    } else {
+        hideProgressBanner();
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', '✕ Error'));
+        showToast(result.error || 'Update failed', true);
+    }
+}
+
+// ── Update All ─────────────────────────────────────────────────────────────────
+
 if (updateAllBtn) {
-    updateAllBtn.addEventListener('click', () => {
+    updateAllBtn.addEventListener('click', async () => {
         if (!confirm(`Trigger updates for all ${UPDATE_COUNT} plugin(s)?`)) return;
-        setGlobalStatus('loading');
-        post('/api/update/all', {}).then(handleResult);
+
+        const allPlugins = [...$$('.plugin-row[data-has-update="true"]')].map(rowToPlugin);
+        allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', '⟳'));
+        updateAllBtn.disabled = true;
+
+        showProgressBanner(`Updating all ${allPlugins.length} plugins…`);
+
+        const result = await post('/api/update/all', {});
+
+        updateAllBtn.disabled = false;
+
+        if (result.success && result.tracker_id) {
+            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', 'Queued'));
+            pollBatchStatus(result.tracker_id, allPlugins);
+        } else if (result.success) {
+            hideProgressBanner();
+            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'success', '✓ Queued'));
+            showToast('All updates queued');
+        } else if (result.script) {
+            hideProgressBanner();
+            allPlugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', 'See script'));
+            showScriptModal(result.script);
+        } else {
+            hideProgressBanner();
+            showToast(result.error || 'Update failed', true);
+        }
     });
 }
 
-// ── Core update helpers ────────────────────────────────────────────────────────
+// ── Status polling — single plugin ─────────────────────────────────────────────
 
-async function runUpdate(endpoint, body, statusEl, btn) {
-    setStatus(statusEl, 'loading', '⟳');
-    if (btn) { btn.disabled = true; btn.classList.add('updating'); }
-    const result = await post(endpoint, body);
-    handleResult(result, statusEl, btn);
-}
-
-function runBatch(plugins) {
-    setGlobalStatus('loading');
-    post('/api/update/batch', { plugins }).then(result => handleResult(result));
-}
-
-function handleResult(result, statusEl, btn) {
-    if (btn) { btn.disabled = false; btn.classList.remove('updating'); }
-
-    if (result.success && result.tracker_id) {
-        if (statusEl) setStatus(statusEl, 'success', '✓ Queued');
-        pollStatus(result.tracker_id, statusEl);
-    } else if (result.success) {
-        if (statusEl) setStatus(statusEl, 'success', '✓ Queued');
-    } else if (result.script) {
-        showScriptModal(result.script);
-        if (statusEl) setStatus(statusEl, 'error', 'See script');
-    } else {
-        if (statusEl) setStatus(statusEl, 'error', '✕ Error');
-        console.error('[Plugin Overseer]', result.error);
+function pollSingleStatus(trackerId, sysId, statusEl, attempt = 0) {
+    if (attempt > 72) {
+        setStatus(statusEl, 'error', 'Timed out');
+        return;
     }
+    fetch(`/api/status/${trackerId}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                setTimeout(() => pollSingleStatus(trackerId, sysId, statusEl, attempt + 1), 5000);
+                return;
+            }
+            const state = (data.state || '').toLowerCase();
+            const pct   = data.percent || 0;
+
+            if (isTerminalSuccess(state)) {
+                setStatus(statusEl, 'success', '✓ Done');
+                markPluginDone(sysId);
+            } else if (isTerminalFailure(state)) {
+                setStatus(statusEl, 'error', '✕ Failed');
+            } else {
+                setStatus(statusEl, 'loading', pct ? `${pct}%` : '…');
+                setTimeout(() => pollSingleStatus(trackerId, sysId, statusEl, attempt + 1), 5000);
+            }
+        })
+        .catch(() => setTimeout(() => pollSingleStatus(trackerId, sysId, statusEl, attempt + 1), 8000));
 }
+
+// ── Status polling — batch ─────────────────────────────────────────────────────
+
+function pollBatchStatus(trackerId, plugins, attempt = 0) {
+    if (attempt > 120) {
+        hideProgressBanner();
+        plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', 'Timed out'));
+        showToast('Update timed out — check ServiceNow App Manager', true);
+        return;
+    }
+
+    fetch(`/api/status/${trackerId}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                setTimeout(() => pollBatchStatus(trackerId, plugins, attempt + 1), 5000);
+                return;
+            }
+
+            const state = (data.state || '').toLowerCase();
+            const pct   = parseInt(data.percent) || 0;
+            const msg   = data.message || '';
+
+            updateProgressBanner(pct, msg);
+            const stateLabel = pct > 0 ? `${pct}%`
+                             : (state === 'queued' || state === 'pending' || state === '' || !state) ? 'Queued…'
+                             : state;
+            plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'loading', stateLabel));
+
+            if (isTerminalSuccess(state)) {
+                hideProgressBanner();
+                plugins.forEach(p => {
+                    setStatus($(`status-${p.sys_id}`), 'success', '✓ Done');
+                    markPluginDone(p.sys_id);
+                });
+                showToast(`${plugins.length} plugin${plugins.length !== 1 ? 's' : ''} updated successfully`);
+            } else if (isTerminalFailure(state)) {
+                hideProgressBanner();
+                plugins.forEach(p => setStatus($(`status-${p.sys_id}`), 'error', '✕ Failed'));
+                showToast(`Update failed — ${msg || 'check ServiceNow for details'}`, true);
+            } else {
+                setTimeout(() => pollBatchStatus(trackerId, plugins, attempt + 1), 5000);
+            }
+        })
+        .catch(() => setTimeout(() => pollBatchStatus(trackerId, plugins, attempt + 1), 8000));
+}
+
+function isTerminalSuccess(state) {
+    return ['complete', 'succeeded', 'success', 'installed'].includes(state);
+}
+
+function isTerminalFailure(state) {
+    return ['failed', 'error', 'cancelled', 'complete_with_errors'].includes(state);
+}
+
+// ── Row completion ─────────────────────────────────────────────────────────────
 
 function markPluginDone(sysId) {
     const row    = document.querySelector(`.plugin-row[data-sys-id="${sysId}"]`);
     const detail = $(`detail-${sysId}`);
     if (!row) return;
 
-    // Update data so filter logic treats it as up-to-date
     row.dataset.hasUpdate = 'false';
     row.classList.remove('row-needs-update');
     row.classList.add('row-up-to-date');
 
-    // Swap badge
     const badge = row.querySelector('.badge-update');
     if (badge) { badge.className = 'badge badge-ok'; badge.textContent = '✓ Current'; }
 
-    // Remove update button and checkbox
     const updateBtn = row.querySelector('.btn-update');
     if (updateBtn) updateBtn.remove();
     const cb = row.querySelector('.plugin-cb');
     if (cb) cb.remove();
 
-    // Dim the row, then after the animation move it out of the updates tab
     row.classList.add('fading-out');
     if (detail) detail.classList.add('fading-out');
 
@@ -202,13 +338,11 @@ function markPluginDone(sysId) {
         row.classList.remove('fading-out');
         if (detail) detail.classList.remove('fading-out');
 
-        // If still on updates tab, hide it (it'll show under Up to Date / All)
         if (activeFilter === 'updates') {
             row.style.display = 'none';
             if (detail) detail.style.display = 'none';
         }
 
-        // Decrement the Updates Available summary count
         const countEl = document.querySelector('.stat-card.danger .stat-num');
         if (countEl) {
             const n = Math.max(0, parseInt(countEl.textContent) - 1);
@@ -216,42 +350,50 @@ function markPluginDone(sysId) {
             if (n === 0) countEl.closest('.stat-card').classList.remove('danger');
         }
 
-        // Increment Up to Date count
         const upToDateEl = document.querySelector('.stat-card.safe .stat-num');
         if (upToDateEl) upToDateEl.textContent = parseInt(upToDateEl.textContent) + 1;
 
-        // Update tab counts
-        const updatesTab = document.querySelector('.tab[data-filter="updates"] .tab-count');
+        const updatesTab  = document.querySelector('.tab[data-filter="updates"] .tab-count');
         const uptodateTab = document.querySelector('.tab[data-filter="uptodate"] .tab-count');
         if (updatesTab)  updatesTab.textContent  = Math.max(0, parseInt(updatesTab.textContent) - 1);
         if (uptodateTab) uptodateTab.textContent = parseInt(uptodateTab.textContent) + 1;
     }, 800);
 }
 
-// ── Status polling ─────────────────────────────────────────────────────────────
+// ── Progress banner ────────────────────────────────────────────────────────────
 
-function pollStatus(trackerId, statusEl, attempt = 0) {
-    if (attempt > 72) {
-        if (statusEl) setStatus(statusEl, 'error', 'Timed out');
-        return;
-    }
-    fetch(`/api/status/${trackerId}`)
-        .then(r => r.json())
-        .then(data => {
-            if (!data.success) return;
-            const state = (data.state || '').toLowerCase();
-            if (state === 'complete' || state === 'succeeded' || state === 'success') {
-                if (statusEl) setStatus(statusEl, 'success', '✓ Done');
-                const sysId = statusEl?.id?.replace('status-', '');
-                if (sysId) markPluginDone(sysId);
-            } else if (state === 'failed' || state === 'error') {
-                if (statusEl) setStatus(statusEl, 'error', '✕ Failed');
-            } else {
-                if (statusEl) setStatus(statusEl, 'loading', data.percent ? `${data.percent}%` : '…');
-                setTimeout(() => pollStatus(trackerId, statusEl, attempt + 1), 5000);
-            }
-        })
-        .catch(() => setTimeout(() => pollStatus(trackerId, statusEl, attempt + 1), 8000));
+function showProgressBanner(label) {
+    if (!progressBanner) return;
+    progressBannerLabel.textContent = label;
+    progressBannerMsg.textContent   = '';
+    progressBarFill.style.width     = '0%';
+    progressBannerPct.textContent   = '0%';
+    progressBanner.classList.add('visible');
+}
+
+function updateProgressBanner(pct, msg) {
+    if (!progressBanner) return;
+    progressBarFill.style.width   = `${pct}%`;
+    progressBannerPct.textContent = pct > 0 ? `${pct}%` : 'Queued';
+    progressBannerMsg.textContent = msg || (pct === 0 ? 'Waiting for other installs to complete…' : '');
+}
+
+function hideProgressBanner() {
+    if (!progressBanner) return;
+    progressBanner.classList.remove('visible');
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────────
+
+let toastTimeout;
+function showToast(text, isError = false) {
+    if (!completionToast) return;
+    toastIcon.textContent = isError ? '✕' : '✓';
+    toastText.textContent = text;
+    completionToast.classList.toggle('error', isError);
+    completionToast.removeAttribute('hidden');
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => completionToast.setAttribute('hidden', ''), 5000);
 }
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
@@ -262,17 +404,19 @@ function setStatus(el, type, text) {
     el.textContent = text;
 }
 
-function setGlobalStatus(type) {
-    $$('.plugin-row[data-has-update="true"]').forEach(row => {
-        if (type === 'loading') setStatus($(`status-${row.dataset.sysId}`), 'loading', '⟳');
-    });
-}
-
 // ── Script fallback modal ──────────────────────────────────────────────────────
 
 function showScriptModal(script) {
     if (!modal) return;
     scriptBox.value = script;
+    // Point the link directly to the background scripts page on this instance
+    const linkEl = $('bg-script-link');
+    if (linkEl) {
+        const instance = document.querySelector('.instance-pill')?.textContent?.replace('.service-now.com', '').trim();
+        if (instance) {
+            linkEl.href = `https://${instance}.service-now.com/sys_script.do`;
+        }
+    }
     modal.removeAttribute('hidden');
 }
 

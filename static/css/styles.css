@@ -434,6 +434,13 @@ main {
     color: var(--teal);
     border: 1px solid rgba(0,133,122,0.25);
 }
+.badge-dep {
+    background: rgba(98,65,154,0.08);
+    color: var(--purple);
+    border: 1px solid rgba(98,65,154,0.2);
+    margin-left: 5px;
+    cursor: default;
+}
 
 /* ── Row status ───────────────────────────────────────────────────── */
 
@@ -501,6 +508,34 @@ main {
     color: var(--muted);
     margin-bottom: 14px;
     flex-wrap: wrap;
+}
+
+.detail-deps-section {
+    margin-bottom: 14px;
+}
+
+.detail-deps-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.dep-chip {
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    background: rgba(98,65,154,0.07);
+    color: var(--purple);
+    border: 1px solid rgba(98,65,154,0.18);
+    border-radius: 20px;
+    padding: 3px 10px;
+    white-space: nowrap;
+}
+
+.dep-chip.dep-needs-update {
+    background: rgba(217,119,6,0.08);
+    color: var(--amber);
+    border-color: rgba(217,119,6,0.25);
 }
 
 .detail-notes-section {
@@ -623,6 +658,140 @@ main {
     gap: 14px;
 }
 .modal-body p { font-size: 0.85rem; color: #444; line-height: 1.55; }
+
+.fallback-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: rgba(217,119,6,0.08);
+    border: 1px solid rgba(217,119,6,0.25);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 0.84rem;
+    color: #7a4f00;
+    line-height: 1.5;
+}
+.fallback-notice-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+
+.fallback-steps {
+    padding-left: 20px;
+    font-size: 0.84rem;
+    color: #333;
+    line-height: 2;
+}
+.fallback-steps a { color: var(--purple); }
+.fallback-steps strong { color: var(--text); }
+
+/* ── Progress banner ──────────────────────────────────────────────── */
+
+.progress-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(255,255,255,0.94);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border-dark);
+    padding: 13px 32px;
+    z-index: 150;
+    transform: translateY(100%);
+    transition: transform 0.28s ease;
+    box-shadow: 0 -4px 24px rgba(0,0,0,0.09);
+}
+.progress-banner.visible { transform: translateY(0); }
+
+.progress-banner-inner {
+    max-width: 1440px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.progress-spinner-icon {
+    font-size: 1.1rem;
+    color: var(--amber);
+    animation: spin 0.9s linear infinite;
+    flex-shrink: 0;
+}
+
+.progress-banner-text {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-width: 190px;
+}
+
+#progress-banner-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.progress-banner-msg {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    margin-top: 2px;
+    min-height: 14px;
+}
+
+.progress-bar-wrap {
+    flex: 1;
+    height: 6px;
+    background: rgba(0,0,0,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--purple), var(--teal));
+    border-radius: 3px;
+    transition: width 0.45s ease;
+}
+
+.progress-banner-pct {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--purple);
+    min-width: 38px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* ── Completion toast ─────────────────────────────────────────────── */
+
+.completion-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: rgba(0,133,122,0.94);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 0.84rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    z-index: 200;
+    box-shadow: 0 4px 20px rgba(0,133,122,0.35);
+    animation: toast-in 0.22s ease;
+}
+.completion-toast[hidden] { display: none; }
+.completion-toast.error {
+    background: rgba(180,28,8,0.93);
+    box-shadow: 0 4px 20px rgba(180,28,8,0.28);
+}
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
 
 .script-box {
     font-family: var(--font-mono);
